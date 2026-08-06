@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart City Dashboard - Direct Database Access</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .card {
+            margin-bottom: 20px;
+        }
+        .alert-card {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        @keyframes highlight {
+            0% { background-color: rgba(255, 255, 0, 0.5); }
+            100% { background-color: transparent; }
+        }
+        .new-item {
+            animation: highlight 3s ease-in-out;
+        }
+        .realtime-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background-color: red;
+            color: white;
+            border-radius: 50%;
+            width: 10px;
+            height: 10px;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .database-status {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24; 
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="#">Smart City Dashboard - Direct DB Mode</a>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title">Resource Monitoring</h5>
+                        <ul class="nav nav-tabs card-header-tabs" id="resource-tabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="water-tab" data-bs-toggle="tab" data-bs-target="#water" type="button" role="tab">Water</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="energy-tab" data-bs-toggle="tab" data-bs-target="#energy" type="button" role="tab">Energy</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="waste-tab" data-bs-toggle="tab" data-bs-target="#waste" type="button" role="tab">Waste</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="traffic-tab" data-bs-toggle="tab" data-bs-target="#traffic" type="button" role="tab">Traffic</button>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="card-body">
+                        <div class="tab-content" id="resource-tab-content">
+                            <div class="tab-pane fade show active" id="water" role="tabpanel">
+                                <canvas id="water-chart" height="200"></canvas>
+                            </div>
+                            <div class="tab-pane fade" id="energy" role="tabpanel">
+                                <canvas id="energy-chart" height="200"></canvas>
+                            </div>
+                            <div class="tab-pane fade" id="waste" role="tabpanel">
+                                <canvas id="waste-chart" height="200"></canvas>
+                            </div>
+                            <div class="tab-pane fade" id="traffic" role="tabpanel">
+                                <canvas id="traffic-chart" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title m-0">Active Alerts</h5>
+                        <button id="refresh-alerts" class="btn btn-sm btn-outline-primary">Refresh</button>
+                    </div>
+                    <div class="card-body alert-card" id="alerts-container">
+                        <!-- Alerts will be dynamically added here -->
+                        <div class="text-center text-muted" id="no-alerts-message">
+                            No active alerts
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title m-0">Recommendations</h5>
+                        <button id="refresh-recommendations" class="btn btn-sm btn-outline-primary">Refresh</button>
+                    </div>
+                    <div class="card-body" id="recommendations-container">
+                        <!-- Recommendations will be dynamically added here -->
+                        <div class="text-center text-muted" id="no-recommendations-message">
+                            No active recommendations
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title">Database Connection</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="db-settings-form">
+                            <div class="mb-3">
+                                <label for="db-url" class="form-label">Database URL</label>
+                                <input type="text" class="form-control" id="db-url" value="jdbc:h2:tcp://localhost/./smartcity">
+                            </div>
+                            <div class="mb-3">
+                                <label for="refresh-interval" class="form-label">Refresh Interval (seconds)</label>
+                                <input type="number" class="form-control" id="refresh-interval" value="5" min="1" max="60">
+                            </div>
+                            <button type="submit" class="btn btn-primary">Connect</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="db-status" class="database-status disconnected">
+        Database: Disconnected
+    </div>
+
+    <!-- H2 Console Form (Hidden) -->
+    <form id="h2-form" method="post" action="http://localhost:8082/query" target="_blank" style="display:none;">
+        <input type="text" name="sql" id="h2-sql-query">
+    </form>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Chart objects to allow updating
+        const charts = {};
+        let refreshInterval = 5; // seconds
+        let refreshTimer = null;
+        let dbConnected = false;
+        
+        // Initial sample data for all resource types
+        const resourceData = {
+            water: {
+                labels: ['10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30'],
+                datasets: [
+                    {
+                        label: 'Water Flow (l/min)',
+                        data: [65, 70, 80, 120, 130, 95, 75],
+                        borderColor: 'blue',
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Water Level (%)',
+                        data: [45, 42, 38, 35, 30, 25, 18],
+                        borderColor: 'green',
+                        tension: 0.1
+                    }
+                ]
+            },
+            energy: {
+                labels: ['10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30'],
+                datasets: [
+                    {
+                        label: 'Energy Consumption (kW)',
+                        data: [320, 350, 410, 380, 320, 290, 330],
+                        borderColor: 'orange',
+                        tension: 0.1
+                    }
+                ]
+            },
+            waste: {
+                labels: ['10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30'],
+                datasets: [
+                    {
+                        label: 'Waste Level (%)',
+                        data: [30, 32, 35, 40, 45, 50, 52],
+                        borderColor: 'brown',
+                        tension: 0.1
+                    }
+                ]
+            },
+            traffic: {
+                labels: ['10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30'],
+                datasets: [
+                    {
+                        label: 'Traffic Density (%)',
+                        data: [45, 60, 75, 85, 70, 55, 40],
+                        borderColor: 'red',
+                        tension: 0.1
+                    }
+                ]
+            }
+        };
+        
+        // Format timestamp to HH:MM:SS
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+        }
+
+        // Initialize charts when document is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeAllCharts();
+            setupEventListeners();
+            
+            // Try to establish connection to H2 database
+            document.getElementById('db-settings-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const dbUrl = document.getElementById('db-url').value;
+                refreshInterval = parseInt(document.getElementById('refresh-interval').value, 10);
+                
+                // Start data updates
+                startDatabasePolling();
+            });
+        });
+        
+        function setupEventListeners() {
+            document.getElementById('refresh-alerts').addEventListener('click', fetchAlerts);
+            document.getElementById('refresh-recommendations').addEventListener('click', fetchRecommendations);
+        }
+        
+        function initializeAllCharts() {
+            initializeChart('water', 'water-chart');
+            initializeChart('energy', 'energy-chart');
+            initializeChart('waste', 'waste-chart');
+            initializeChart('traffic', 'traffic-chart');
+        }
+        
+        function initializeChart(resourceType, canvasId) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            charts[resourceType] = new Chart(ctx, {
+                type: 'line',
+                data: resourceData[resourceType],
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+        
+        function startDatabasePolling() {
+            // Clear existing timer if it exists
+            if (refreshTimer !== null) {
+                clearInterval(refreshTimer);
+            }
+            
+            // Set connection status
+            dbConnected = true;
+            updateConnectionStatus(true);
+            
+            // Fetch data immediately
+            fetchAllData();
+            
+            // Set up interval for continuous polling
+            refreshTimer = setInterval(fetchAllData, refreshInterval * 1000);
+            console.log(`Database polling started - refreshing every ${refreshInterval} seconds`);
+        }
+        
+        function updateConnectionStatus(isConnected) {
+            const statusElement = document.getElementById('db-status');
+            if (isConnected) {
+                statusElement.className = 'database-status connected';
+                statusElement.textContent = 'Database: Connected';
+            } else {
+                statusElement.className = 'database-status disconnected';
+                statusElement.textContent = 'Database: Disconnected';
+            }
+        }
+        
+        function fetchAllData() {
+            const resources = ['water', 'energy', 'waste', 'traffic'];
+            resources.forEach(resourceType => {
+                fetchResourceData(resourceType);
+            });
+            
+            fetchAlerts();
+            fetchRecommendations();
+        }
+        
+        function fetchResourceData(resourceType) {
+            // For local standalone version, we're simulating data from the database
+            
+            // In a real implementation, this would query the H2 database directly
+            // For demo purposes, we're generating random data
+            const data = generateRandomSensorData(resourceType, 10);
+            updateChart(resourceType, data);
+        }
+        
+        function generateRandomSensorData(resourceType, count) {
+            const result = [];
+            const now = new Date();
+            
+            for (let i = 0; i < count; i++) {
+                let type, value, unit, location;
+                
+                switch (resourceType) {
+                    case 'water':
+                        type = Math.random() > 0.5 ? 'WATER_LEVEL' : 'WATER_FLOW';
+                        value = type === 'WATER_LEVEL' ? 
+                                10 + Math.random() * 80 : // 10-90%
+                                40 + Math.random() * 120; // 40-160 l/min
+                        unit = type === 'WATER_LEVEL' ? '%' : 'l/min';
+                        location = type === 'WATER_LEVEL' ? 
+                                  `Reservoir ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}` :
+                                  `${Math.random() > 0.5 ? 'Main' : 'Secondary'} Pipeline`;
+                        break;
+                    case 'energy':
+                        type = 'ENERGY_CONSUMPTION';
+                        value = 180 + Math.random() * 340; // 180-520 kW
+                        unit = 'kW';
+                        location = `District ${Math.floor(Math.random() * 3) + 1}`;
+                        break;
+                    case 'waste':
+                        type = 'WASTE_LEVEL';
+                        value = 10 + Math.random() * 90; // 10-100%
+                        unit = '%';
+                        location = `Container ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}`;
+                        break;
+                    case 'traffic':
+                        type = 'TRAFFIC_DENSITY';
+                        value = Math.random() * 100; // 0-100%
+                        unit = '%';
+                        location = `Junction ${['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]}`;
+                        break;
+                }
+                
+                // Create timestamp that's i*2 minutes in the past from now
+                const timestamp = new Date(now.getTime() - i * 120000);
+                
+                result.push({
+                    sensorId: `${resourceType}-${Math.floor(Math.random() * 3) + 1}`,
+                    type: type,
+                    value: parseFloat(value.toFixed(2)),
+                    unit: unit,
+                    location: location,
+                    timestamp: timestamp.toISOString()
+                });
+            }
+            
+            return result;
+        }
+        
+        function updateChart(resourceType, readings) {
+            if (!readings || readings.length === 0 || !charts[resourceType]) {
+                console.log(`Skipping chart update for ${resourceType}: no valid data or chart`);
+                return;
+            }
+            
+            console.log(`Updating ${resourceType} chart with ${readings.length} readings`);
+            
+            try {
+                // Group readings by sensor type
+                const sensorTypes = {};
+                readings.forEach(reading => {
+                    const type = reading.type;
+                    if (!sensorTypes[type]) {
+                        sensorTypes[type] = [];
+                    }
+                    sensorTypes[type].push(reading);
+                });
+                
+                // Sort readings by timestamp (newest first)
+                Object.values(sensorTypes).forEach(typeReadings => {
+                    typeReadings.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                });
+                
+                // Create new datasets and labels
+                const newData = {
+                    labels: [],
+                    datasets: []
+                };
+                
+                // Add data from each sensor type
+                let datasetIndex = 0;
+                Object.entries(sensorTypes).forEach(([type, typeReadings]) => {
+                    // Use up to 10 most recent readings
+                    const recentReadings = typeReadings.slice(0, 10).reverse();
+                    
+                    if (recentReadings.length === 0) return;
+                    
+                    // Create dataset for this sensor type
+                    const dataset = {
+                        label: `${type} (${recentReadings[0]?.unit || ''})`,
+                        data: recentReadings.map(r => r.value),
+                        borderColor: resourceData[resourceType].datasets[datasetIndex]?.borderColor || getRandomColor(),
+                        backgroundColor: 'rgba(0, 0, 0, 0.1)',
+                        tension: 0.1,
+                        fill: false
+                    };
+                    
+                    newData.datasets.push(dataset);
+                    datasetIndex++;
+                    
+                    // Add timestamps to labels if not already added
+                    if (newData.labels.length === 0) {
+                        newData.labels = recentReadings.map(r => formatTime(new Date(r.timestamp)));
+                    }
+                });
+                
+                // Update the chart with new data if we have labels
+                if (newData.labels.length > 0) {
+                    charts[resourceType].data.labels = newData.labels;
+                    charts[resourceType].data.datasets = newData.datasets;
+                    charts[resourceType].update();
+                } else {
+                    console.warn(`No valid data points for ${resourceType} chart`);
+                }
+            } catch (error) {
+                console.error(`Error updating ${resourceType} chart:`, error);
+            }
+        }
+        
+        function fetchAlerts() {
+            // For standalone version, simulate alerts
+            const alerts = generateRandomAlerts();
+            updateAlerts(alerts);
+        }
+        
+        function fetchRecommendations() {
+            // For standalone version, simulate recommendations
+            const recommendations = generateRandomRecommendations();
+            updateRecommendations(recommendations);
+        }
+        
+        function generateRandomAlerts() {
+            const alertTypes = [
+                { type: 'WATER_LEVEL', message: 'Low water level detected: {value}% at {location}', severity: 'MEDIUM' },
+                { type: 'WATER_FLOW', message: 'High water flow detected: {value} l/min at {location}', severity: 'HIGH' },
+                { type: 'ENERGY_CONSUMPTION', message: 'High energy consumption detected: {value} kW at {location}', severity: 'HIGH' },
+                { type: 'WASTE_LEVEL', message: 'High waste level detected: {value}% at {location}', severity: 'MEDIUM' },
+                { type: 'TRAFFIC_DENSITY', message: 'Heavy traffic detected: {value}% at {location}', severity: 'MEDIUM' }
+            ];
+            
+            const results = [];
+            const alertCount = Math.floor(Math.random() * 3); // 0-2 alerts
+            
+            for (let i = 0; i < alertCount; i++) {
+                const alertType = alertTypes[Math.floor(Math.random() * alertTypes.length)];
+                let value, location;
+                
+                switch (alertType.type) {
+                    case 'WATER_LEVEL':
+                        value = (10 + Math.random() * 20).toFixed(1); // 10-30%
+                        location = `Reservoir ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}`;
+                        break;
+                    case 'WATER_FLOW':
+                        value = (120 + Math.random() * 40).toFixed(1); // 120-160 l/min
+                        location = `${Math.random() > 0.5 ? 'Main' : 'Secondary'} Pipeline`;
+                        break;
+                    case 'ENERGY_CONSUMPTION':
+                        value = (400 + Math.random() * 100).toFixed(1); // 400-500 kW
+                        location = `District ${Math.floor(Math.random() * 3) + 1}`;
+                        break;
+                    case 'WASTE_LEVEL':
+                        value = (80 + Math.random() * 20).toFixed(1); // 80-100%
+                        location = `Container ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}`;
+                        break;
+                    case 'TRAFFIC_DENSITY':
+                        value = (75 + Math.random() * 25).toFixed(1); // 75-100%
+                        location = `Junction ${['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]}`;
+                        break;
+                }
+                
+                // Replace placeholders in message
+                let message = alertType.message.replace('{value}', value).replace('{location}', location);
+                
+                results.push({
+                    id: `alert-${Date.now()}-${i}`,
+                    sensorId: `sensor-${Math.floor(Math.random() * 10) + 1}`,
+                    sensorType: alertType.type,
+                    message: message,
+                    severity: alertType.severity,
+                    timestamp: new Date().toISOString(),
+                    acknowledged: false
+                });
+            }
+            
+            return results;
+        }
+        
+        function generateRandomRecommendations() {
+            const recTypes = [
+                { resource: 'Water', action: 'Reduce water pressure in {location}', justification: 'High flow detected, possible leak or overuse', savings: '20-40', unit: 'l/min' },
+                { resource: 'Water', action: 'Increase water supply to {location}', justification: 'Low water level detected', savings: '10-20', unit: '%' },
+                { resource: 'Energy', action: 'Reduce power usage in {location} during peak hours', justification: 'Excessive consumption detected', savings: '50-120', unit: 'kW' },
+                { resource: 'Waste', action: 'Schedule additional collection at {location}', justification: 'Container nearly full, risk of overflow', savings: '10-20', unit: '%' },
+                { resource: 'Traffic', action: 'Adjust traffic lights timing at {location}', justification: 'Heavy congestion detected', savings: '12-18', unit: 'min' }
+            ];
+            
+            const results = [];
+            const recCount = Math.floor(Math.random() * 2) + 1; // 1-2 recommendations
+            
+            for (let i = 0; i < recCount; i++) {
+                const recType = recTypes[Math.floor(Math.random() * recTypes.length)];
+                let location;
+                
+                switch (recType.resource) {
+                    case 'Water':
+                        location = Math.random() > 0.5 ? 
+                                  `Reservoir ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}` :
+                                  `${Math.random() > 0.5 ? 'Main' : 'Secondary'} Pipeline`;
+                        break;
+                    case 'Energy':
+                        location = `District ${Math.floor(Math.random() * 3) + 1}`;
+                        break;
+                    case 'Waste':
+                        location = `Container ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}`;
+                        break;
+                    case 'Traffic':
+                        location = `Junction ${['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]}`;
+                        break;
+                }
+                
+                // Replace location in action
+                let action = recType.action.replace('{location}', location);
+                
+                // Parse savings range and get a random value in that range
+                let [min, max] = recType.savings.split('-').map(Number);
+                let savingsValue = (min + Math.random() * (max - min)).toFixed(1);
+                
+                results.push({
+                    id: `rec-${Date.now()}-${i}`,
+                    resource: recType.resource,
+                    action: action,
+                    justification: recType.justification,
+                    expectedSavings: parseFloat(savingsValue),
+                    savingsUnit: recType.unit,
+                    timestamp: new Date().toISOString(),
+                    implemented: false
+                });
+            }
+            
+            return results;
+        }
+        
+        function updateAlerts(alerts) {
+            const alertsContainer = document.getElementById('alerts-container');
+            const noAlertsMessage = document.getElementById('no-alerts-message');
+            
+            // Clear existing alerts
+            while (alertsContainer.firstChild) {
+                if (alertsContainer.firstChild === noAlertsMessage) {
+                    break;
+                }
+                alertsContainer.removeChild(alertsContainer.firstChild);
+            }
+            
+            // Show or hide "no alerts" message
+            if (alerts && alerts.length > 0) {
+                noAlertsMessage.style.display = 'none';
+                
+                // Add alerts
+                alerts.forEach(alert => {
+                    const alertDiv = document.createElement('div');
+                    alertDiv.className = `alert alert-${getSeverityClass(alert.severity)} new-item`;
+                    alertDiv.dataset.alertId = alert.id;
+                    
+                    alertDiv.innerHTML = `
+                        <div class="realtime-badge"></div>
+                        <strong>${alert.sensorType} Alert:</strong> ${alert.message}
+                        <button class="btn btn-sm btn-outline-dark float-end">Acknowledge</button>
+                    `;
+                    
+                    // Add event listener to new button
+                    const button = alertDiv.querySelector('button');
+                    button.addEventListener('click', function() {
+                        // In standalone mode, just remove the alert
+                        alertDiv.remove();
+                        
+                        // Check if there are no more alerts
+                        if (alertsContainer.children.length === 1 && alertsContainer.firstChild === noAlertsMessage) {
+                            noAlertsMessage.style.display = 'block';
+                        }
+                    });
+                    
+                    // Add to container
+                    alertsContainer.insertBefore(alertDiv, noAlertsMessage);
+                });
+            } else {
+                noAlertsMessage.style.display = 'block';
+            }
+        }
+        
+        function updateRecommendations(recommendations) {
+            const recsContainer = document.getElementById('recommendations-container');
+            const noRecsMessage = document.getElementById('no-recommendations-message');
+            
+            // Clear existing recommendations
+            while (recsContainer.firstChild) {
+                if (recsContainer.firstChild === noRecsMessage) {
+                    break;
+                }
+                recsContainer.removeChild(recsContainer.firstChild);
+            }
+            
+            // Show or hide "no recommendations" message
+            if (recommendations && recommendations.length > 0) {
+                noRecsMessage.style.display = 'none';
+                
+                // Add recommendations
+                recommendations.forEach(rec => {
+                    const recDiv = document.createElement('div');
+                    recDiv.className = 'card mb-2 new-item';
+                    recDiv.dataset.recId = rec.id;
+                    
+                    recDiv.innerHTML = `
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">${rec.resource} Resource Optimization</h6>
+                            <p class="card-text">${rec.action}</p>
+                            <small class="text-muted">Savings: ${rec.expectedSavings} ${rec.savingsUnit}</small>
+                            <button class="btn btn-sm btn-success">Implement</button>
+                        </div>
+                    `;
+                    
+                    // Add event listener to new button
+                    const button = recDiv.querySelector('button');
+                    button.addEventListener('click', function() {
+                        // In standalone mode, just remove the recommendation
+                        recDiv.remove();
+                        
+                        // Check if there are no more recommendations
+                        if (recsContainer.children.length === 1 && recsContainer.firstChild === noRecsMessage) {
+                            noRecsMessage.style.display = 'block';
+                        }
+                    });
+                    
+                    // Add to container
+                    recsContainer.insertBefore(recDiv, noRecsMessage);
+                });
+            } else {
+                noRecsMessage.style.display = 'block';
+            }
+        }
+        
+        function getSeverityClass(severity) {
+            switch (severity) {
+                case 'LOW': return 'info';
+                case 'MEDIUM': return 'warning';
+                case 'HIGH': return 'danger';
+                case 'CRITICAL': return 'danger';
+                default: return 'secondary';
+            }
+        }
+        
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+    </script>
+</body>
+</html>
