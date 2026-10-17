@@ -30,15 +30,12 @@ public class SensorSimulator {
     private final Random random = new Random();
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SensorDataProducer kafkaProducer;
-    private boolean useKafka = false;
+    private final boolean useKafka;
     
-    public SensorSimulator() {
-        this.kafkaProducer = new SensorDataProducer();
-    }
-    
-    public void enableKafka(boolean enable) {
-        this.useKafka = enable;
-        logger.info("Kafka integration for sensor simulator: {}", enable ? "enabled" : "disabled");
+    public SensorSimulator(boolean useKafka) {
+        this.useKafka = useKafka;
+        this.kafkaProducer = useKafka ? new SensorDataProducer() : null;
+        logger.info("Kafka integration for sensor simulator: {}", useKafka ? "enabled" : "disabled");
     }
     
     public void start() {

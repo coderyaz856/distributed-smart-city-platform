@@ -83,6 +83,7 @@ public class DashboardWebSocketEndpoint {
     }
     
     private static void send(String type, Map<String,Object> body) {
+        if (sessions.isEmpty()) return;
         try {
             var message = new HashMap<String,Object>();
             message.put("type", type);

@@ -83,7 +83,9 @@
     }
 
     function connectWebSocket(){
-      const socket = new WebSocket(`ws://${location.host}/ws`);
+      const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+      const endpoint = window.SMARTCITY_WEBSOCKET_URL || `${scheme}://${location.hostname}:8081/ws`;
+      const socket = new WebSocket(endpoint);
       socket.onopen    = ()=>console.log('WS connected');
       socket.onmessage = e => {
         const msg = JSON.parse(e.data);

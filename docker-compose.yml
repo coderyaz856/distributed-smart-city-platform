@@ -1,33 +1,83 @@
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.0
-    container_name: zookeeper
+  app:
+    build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    env_file: .env
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-smartcity}
+      DB_USER: ${POSTGRES_USER:-smartcity}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PORT: 8080
+      WEBSOCKET_PORT: 8081
     ports:
-      - "2181:2181"
-    networks:
-      - smartcity-network
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/api/health/ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 30s
+    networks: [backend]
+
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartcity}
+      POSTGRES_USER: ${POSTGRES_USER:-smartcity}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartcity} -d ${POSTGRES_DB:-smartcity}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
 
   kafka:
-    image: confluentinc/cp-kafka:7.3.0
-    container_name: kafka
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
+    image: apache/kafka:3.7.1
+    restart: unless-stopped
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-    networks:
-      - smartcity-network
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [backend]
+
+volumes:
+  postgres-data:
+  kafka-data:
 
 networks:
-  smartcity-network:
+  backend:
     driver: bridge
