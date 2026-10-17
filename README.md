@@ -1,10 +1,26 @@
-# Distributed Smart City Platform
+# Distributed Smart City Platform — Academic Prototype
 
-A distributed resource-management system for a simulated smart city, built in Java. Sensor readings flow through a Kafka pipeline into domain services that persist them, evaluate them against thresholds, raise alerts, and push live updates to a browser dashboard.
+An academic systems prototype for simulated smart-city resource management, built in Java. It explores how sensor readings can move through Kafka into domain services that persist them, evaluate thresholds, raise alerts, and push live updates to a browser dashboard.
 
-The project's focus is **middleware breadth**: five different communication mechanisms — event streaming, remote objects, raw sockets, REST and WebSocket — coexist in a single application, each used where it fits.
+The project's focus is **middleware breadth**: five different communication mechanisms — event streaming, remote objects, raw sockets, REST and WebSocket — coexist in one local application, each used where it fits.
 
-Status: academic project (ENSIAS), runnable end to end.
+> [!IMPORTANT]
+> **Status: academic prototype (ENSIAS).** The repository demonstrates the core data path and transport integrations in a local environment. It is not a complete or production-ready smart-city platform.
+
+## Demonstrated scope
+
+- Simulated sensor events published to and consumed from Kafka.
+- Water, energy, traffic and waste services behind a shared interface.
+- H2 persistence for readings, alerts and recommendations.
+- Local access through RMI, raw TCP, REST and WebSocket.
+- Threshold-based alerts and an optional external-LLM recommendation path.
+- A browser dashboard for observing the simulated stream.
+
+## Prototype boundaries
+
+The repository does not claim multi-node operation, high availability or production-scale validation. It currently has no automated test suite, authentication or authorization, TLS configuration, secrets management, schema migration system, observability stack, load-test evidence, disaster recovery, or deployment manifests for a managed environment. SOAP annotations remain scaffolded, but endpoint publication is disabled because the implementation is incompatible with the targeted Java runtime.
+
+These are explicit boundaries of the prototype rather than completed capabilities.
 
 ## Architecture
 
