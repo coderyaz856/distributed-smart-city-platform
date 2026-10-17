@@ -133,6 +133,16 @@ mvn verify
 KAFKA_ENABLED=false WEBSOCKET_ENABLED=false mvn exec:java
 ```
 
+### GitHub production image
+
+The `Production` GitHub Actions workflow verifies the Maven build and publishes the tested application image to GitHub Container Registry. Every published image receives an immutable commit tag; branch and release-tag aliases are also generated. A successful build from `main` additionally updates `latest`.
+
+```bash
+docker pull ghcr.io/coderyaz856/distributed-smart-city-platform:latest
+```
+
+The workflow uses the repository-scoped `GITHUB_TOKEN`, so it requires no Google Cloud account or long-lived deployment secret. Its third-party actions are pinned to immutable commit SHAs, and BuildKit publishes provenance and an SBOM with the image.
+
 ## Verification
 
 - `mvn clean verify` builds the Java 17 executable JAR and passes the JUnit 5 water-pipeline integration test.
@@ -190,6 +200,7 @@ docker-compose.yml               Application + PostgreSQL + Kafka KRaft
 | Dashboard | HTML, CSS, JavaScript, Bootstrap 5, Chart.js, REST polling and WebSocket updates |
 | Verification | JUnit 5 integration test covering ingestion, persistence and threshold-based alert creation |
 | Packaging | Multi-stage Docker image, non-root runtime, Docker Compose, persistent PostgreSQL and Kafka volumes |
+| GitHub delivery | GitHub Actions verification, Buildx caching, immutable action pins, GHCR publishing, provenance and SBOM |
 
 ## Runtime configuration
 
