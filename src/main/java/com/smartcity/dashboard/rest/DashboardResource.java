@@ -3,6 +3,7 @@ package com.smartcity.dashboard.rest;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DefaultValue;
@@ -35,7 +36,7 @@ public class DashboardResource {
     
     private final Map<String, ResourceService> services = new HashMap<>();
     private static final Logger logger = LoggerFactory.getLogger(DashboardResource.class);
-    private static Map<String, String> lastDataHashMap = new HashMap<>();
+    private static final Map<String, String> lastDataHashMap = new ConcurrentHashMap<>();
     
     public DashboardResource() {
         // Initialize services

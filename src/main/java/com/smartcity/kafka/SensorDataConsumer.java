@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.errors.WakeupException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +35,7 @@ public class SensorDataConsumer implements Runnable {
     public void start() {
         consumer.subscribe(Collections.singletonList(KafkaConfig.SENSOR_DATA_TOPIC));
         running.set(true);
-        consumerThread = new Thread(this);
+        consumerThread = new Thread(this, "sensor-data-consumer");
         consumerThread.start();
         logger.info("Sensor data consumer started");
     }
@@ -60,6 +61,8 @@ public class SensorDataConsumer implements Runnable {
                     consumer.commitSync();
                 }
             }
+        } catch (WakeupException e) {
+            if (running.get()) logger.error("Kafka consumer was interrupted unexpectedly", e);
         } catch (Exception e) {
             logger.error("Error in sensor data consumer: {}", e.getMessage(), e);
         } finally {
@@ -99,8 +102,14 @@ public class SensorDataConsumer implements Runnable {
 
     public void stop() {
         running.set(false);
-        if (consumerThread != null) {
-            consumerThread.interrupt();
+        consumer.wakeup();
+        if (consumerThread != null && consumerThread != Thread.currentThread()) {
+            try {
+                consumerThread.join(10_000);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                logger.warn("Interrupted while waiting for Kafka consumer shutdown");
+            }
         }
         logger.info("Sensor data consumer stopping");
     }

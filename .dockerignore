@@ -1,0 +1,9 @@
+.git
+.github
+.idea
+target
+*.iml
+*.mv.db
+*.trace.db
+*.log
+.env

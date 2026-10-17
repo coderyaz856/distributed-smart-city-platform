@@ -11,16 +11,33 @@ The project's focus is **middleware breadth**: five different communication mech
 
 - Simulated sensor events published to and consumed from Kafka.
 - Water, energy, traffic and waste services behind a shared interface.
-- H2 persistence for readings, alerts and recommendations.
+- PostgreSQL persistence in the container profile, with H2 retained for local tests.
 - Local access through RMI, raw TCP, REST and WebSocket.
 - Threshold-based alerts and an optional external-LLM recommendation path.
 - A browser dashboard for observing the simulated stream.
 
 ## Prototype boundaries
 
-The repository does not claim multi-node operation, high availability or production-scale validation. It currently has no automated test suite, authentication or authorization, TLS configuration, secrets management, schema migration system, observability stack, load-test evidence, disaster recovery, or deployment manifests for a managed environment. SOAP annotations remain scaffolded, but endpoint publication is disabled because the implementation is incompatible with the targeted Java runtime.
+The repository does not claim multi-node operation, high availability or production-scale validation. Authentication and authorization, TLS termination, managed secret storage, load-test evidence, disaster recovery, and a provider-specific deployment are still outstanding.
 
 These are explicit boundaries of the prototype rather than completed capabilities.
+
+## Production foundation
+
+The repository now includes a deployable baseline around one tested vertical slice:
+
+- a multi-stage, non-root Java 17 container with a readiness health check;
+- environment-driven database, Kafka, ports and optional transport configuration;
+- pooled PostgreSQL connections through HikariCP and versioned Flyway migrations;
+- liveness and database-backed readiness endpoints;
+- JSON application logs suitable for collection by a managed runtime;
+- graceful Kafka consumer wake-up and process shutdown;
+- a Docker Compose stack with PostgreSQL 16 and Kafka in KRaft mode;
+- an integration test that sends a low-water reading through the water service and verifies both persistence and alert creation.
+
+RMI, raw TCP, simulators, demo seeding and the continuous generator are disabled by default. They can be enabled explicitly for local demonstrations. The AI recommendation path is also inert unless both its endpoint and API key are configured.
+
+The original breadth remains available. `SensorSimulator` can drive Kafka or the enabled local RMI and raw-TCP paths; `ContinuousDataGenerator` exercises the domain services directly; and the seed-data mode provides a deterministic way to populate the dashboard without external infrastructure.
 
 ## Architecture
 
@@ -33,7 +50,7 @@ SensorSimulator ──► Kafka topic "sensor-data" ──► SensorDataConsumer
                                                         │
                             ┌───────────────────────────┼───────────────────────────┐
                             ▼                           ▼                           ▼
-                     H2 persistence            threshold evaluation         WebSocket broadcast
+                     PostgreSQL / H2            threshold evaluation         WebSocket broadcast
                   sensor_data / alerts /             → Alert                   → live dashboard
                     recommendations                  → Recommendation
 ```
@@ -48,11 +65,11 @@ The same services are additionally reachable over RMI, a raw TCP socket listener
 | Remote objects | Java RMI registry, `ResourceManagementRMI` | `localhost:1099`, bound as `ResourceManagement` |
 | Raw TCP | `ServerSocket` with a 10-thread pool | `localhost:9999` |
 | REST | JAX-RS (Jersey) on an embedded Grizzly server | `http://localhost:8080/api/` |
-| Push updates | WebSocket (Tyrus) | `ws://localhost:8080/ws` |
+| Push updates | WebSocket (Tyrus) | `ws://localhost:8081/ws` |
 
 The Kafka layer is configured for delivery guarantees rather than defaults: the producer runs idempotent with `acks=all` and retries, and the consumer disables auto-commit in favour of an explicit `commitSync()` after each batch.
 
-SOAP is scaffolded — the services carry JAX-WS `@WebService` / `@WebMethod` annotations — but endpoint publication is commented out in `Main`, since JAX-WS reflection fails on Java 17+.
+The production baseline removes the inactive SOAP annotations and runtime. REST, Kafka, RMI, TCP, and WebSocket remain available as independently configurable transports.
 
 ### Domain services
 
@@ -69,7 +86,7 @@ Each reading is persisted, broadcast to connected dashboards, and — when a thr
 
 ### Persistence
 
-Embedded H2 (`jdbc:h2:./smartcity;AUTO_SERVER=TRUE`) with three tables — `sensor_data`, `alerts`, `recommendations` — managed by a singleton `H2DatabaseManager`. The H2 web console starts alongside the application at `http://localhost:8082/`.
+The container profile uses PostgreSQL 16 and a bounded HikariCP connection pool. Flyway owns the schema for `sensor_data`, `alerts`, and `recommendations`, including the indexes used by recent-reading and open-alert queries. H2 runs in PostgreSQL compatibility mode for local development and the integration test.
 
 ## REST API
 
@@ -77,52 +94,63 @@ Base URI `http://localhost:8080/api/`. `{resourceType}` is one of `water`, `ener
 
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/health/live` | Process liveness |
+| `GET` | `/health/ready` | Database-backed readiness |
 | `GET` | `/dashboard/sensors/{resourceType}?count=10` | Latest sensor readings |
 | `GET` | `/dashboard/alerts/{resourceType}` | Active alerts |
 | `GET` | `/dashboard/recommendations/{resourceType}` | Generated recommendations |
 | `POST` | `/dashboard/alerts/{alertId}/acknowledge` | Acknowledge an alert |
 | `POST` | `/dashboard/recommendations/{recommendationId}/implement` | Mark a recommendation as implemented |
 
-Read endpoints hash their payload and return `304 Not Modified` when the data has not changed, so the dashboard can poll cheaply.
+Read endpoints hash their payload and expose `X-Data-Hash` and `X-Data-Changed` headers so clients can detect unchanged results.
 
 ## Requirements
 
-- JDK 11
-- Maven 3.6+
-- Docker and Docker Compose (for Kafka and ZooKeeper)
+- Docker with the Compose plugin, or JDK 17 and Maven 3.9+
 
 ## Running
 
-Start Kafka, ZooKeeper and the application together:
+Create a local environment file, replace its database password, then build and start the complete stack:
 
 ```bash
-./start-application.sh
+cp .env.example .env
+docker compose up --build
 ```
 
-The script brings up the Compose stack if it is not already running, waits for the broker, then launches the application via `mvn exec:java`. Kafka can also be controlled on its own:
+The REST API and dashboard are exposed on port 8080; WebSocket traffic uses port 8081. Verify both process and database readiness with:
 
 ```bash
-./manage-kafka.sh start | stop | status
+curl http://localhost:8080/api/health/live
+curl http://localhost:8080/api/health/ready
 ```
 
-Once the log reads `Smart City Resource Management System started successfully`, open `src/main/webapp/index-standalone.html` in a browser and click **Connect** (green button, bottom right) to open the WebSocket stream. Allow a few seconds for the simulator to begin publishing.
+Kafka consumption is enabled in the Compose profile. The simulator and demo seed data remain off until explicitly enabled in `.env`.
 
-To run an already-compiled build without Maven:
+Run the tested local profile without containers:
 
 ```bash
-./run-application.sh
+mvn verify
+KAFKA_ENABLED=false WEBSOCKET_ENABLED=false mvn exec:java
 ```
+
+## Verification
+
+- `mvn clean verify` builds the Java 17 executable JAR and passes the JUnit 5 water-pipeline integration test.
+- A packaged-JAR smoke test verifies liveness, database readiness, an empty water-reading query, static dashboard delivery, and graceful shutdown.
+- A real WebSocket client handshake verifies the Tyrus endpoint at `/ws`.
+- The Compose document is parsed as YAML and references the available official `apache/kafka:3.7.1` image.
+
+Docker is still required to execute the complete PostgreSQL and Kafka container topology end to end.
 
 ## Ports
 
 | Port | Service |
 | --- | --- |
-| 8080 | REST API, static dashboard, WebSocket |
-| 8082 | H2 web console |
-| 9092 | Kafka broker |
-| 9999 | Sensor TCP socket server |
-| 2181 | ZooKeeper |
-| 1099 | RMI registry |
+| 8080 | REST API and static dashboard |
+| 8081 | WebSocket endpoint |
+| 9092 | Kafka broker (internal to Compose by default) |
+| 9999 | Optional sensor TCP socket server |
+| 1099 | Optional RMI registry |
 
 ## Repository structure
 
@@ -135,15 +163,49 @@ src/main/java/com/smartcity/
 ├── communication/socket/        TCP socket server
 ├── dashboard/rest/              JAX-RS resources
 ├── dashboard/websocket/         WebSocket endpoint and broadcasting
-├── db/                          H2 schema and data access
+├── config/                      Environment-driven runtime configuration
+├── db/                          Pooled database access
 ├── services/                    Water, energy, traffic and waste services
 ├── sensors/                     Sensor simulator
 └── simulation/                  Continuous data generator
 
-src/main/webapp/                 Browser dashboard
-docker-compose.yml               Kafka + ZooKeeper (Confluent 7.3.0)
+src/main/resources/db/migration/ Flyway schema migrations
+src/test/                        Water pipeline integration test
+src/main/webapp/                 Browser dashboard and retained standalone variant
+Dockerfile                       Reproducible non-root application image
+docker-compose.yml               Application + PostgreSQL + Kafka KRaft
 ```
 
 ## Technologies
 
-Java 11 · Maven · Apache Kafka · Java RMI · JAX-RS (Jersey) · Grizzly · WebSocket (Tyrus) · H2 · Jackson · OkHttp · Gson · SLF4J/Logback · Docker Compose
+| Area | Technologies and demonstrated work |
+| --- | --- |
+| Runtime and build | Java 17, Maven, Maven Shade executable JAR, scheduled executors, graceful JVM shutdown |
+| Event streaming | Apache Kafka 3.7 client, idempotent producer, manual consumer commits, KRaft broker profile |
+| HTTP and realtime | JAX-RS, Jersey 2.41, embedded Grizzly, Tyrus WebSocket, liveness and readiness probes |
+| Additional transports | Java RMI and a concurrent raw-TCP `ServerSocket` ingestion service |
+| Data | PostgreSQL 16, H2 compatibility profile, JDBC, HikariCP pooling, Flyway migrations |
+| Serialization and integration | Jackson with Java-time support, Gson, OkHttp, optional external AI recommendation endpoint |
+| Observability | SLF4J, Logback, Logstash JSON encoder, structured lifecycle events |
+| Dashboard | HTML, CSS, JavaScript, Bootstrap 5, Chart.js, REST polling and WebSocket updates |
+| Verification | JUnit 5 integration test covering ingestion, persistence and threshold-based alert creation |
+| Packaging | Multi-stage Docker image, non-root runtime, Docker Compose, persistent PostgreSQL and Kafka volumes |
+
+## Runtime configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DB_URL` | local H2 database | JDBC URL; Compose supplies PostgreSQL |
+| `DB_USER`, `DB_PASSWORD` | `sa`, blank | Database credentials |
+| `DB_MAX_POOL_SIZE` | `10` | Maximum HikariCP pool size |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka bootstrap address |
+| `PORT` | `8080` | REST API and dashboard port |
+| `WEBSOCKET_PORT` | `8081` | WebSocket server port |
+| `KAFKA_ENABLED` | `true` | Start the Kafka consumer |
+| `WEBSOCKET_ENABLED` | `true` | Start live dashboard push updates |
+| `RMI_ENABLED`, `SOCKET_ENABLED` | `false` | Enable the optional RMI and raw-TCP servers |
+| `SIMULATOR_ENABLED` | `false` | Enable the multi-transport sensor simulator |
+| `CONTINUOUS_GENERATOR_ENABLED` | `false` | Generate readings directly through domain services |
+| `DEMO_SEED_DATA` | `false` | Insert a small local demonstration dataset |
+| `GEMINI_ENDPOINT`, `GEMINI_API_KEY` | unset | Enable the optional AI recommendation call |
+| `STATIC_CONTENT_PATH` | `./src/main/webapp` | Dashboard asset directory |

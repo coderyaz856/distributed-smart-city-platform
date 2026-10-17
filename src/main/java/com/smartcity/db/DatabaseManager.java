@@ -1,11 +1,9 @@
 package com.smartcity.db;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -14,88 +12,75 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.flywaydb.core.Flyway;
+
 import com.smartcity.common.model.Alert;
 import com.smartcity.common.model.Recommendation;
 import com.smartcity.common.model.SensorData;
 import com.smartcity.common.model.SensorType;
+import com.smartcity.config.AppConfig;
 
-public class H2DatabaseManager {
-    private static final Logger logger = LoggerFactory.getLogger(H2DatabaseManager.class);
-    private static final String DB_URL = "jdbc:h2:./smartcity;AUTO_SERVER=TRUE";
-    private static final String USER = "sa";
-    private static final String PASS = "";
+public class DatabaseManager {
+    private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
+    private final HikariDataSource dataSource;
+    private static DatabaseManager instance;
     
-    private static H2DatabaseManager instance;
-    
-    private H2DatabaseManager() {
-        initializeDatabase();
+    private DatabaseManager() {
+        AppConfig config = AppConfig.fromEnvironment();
+        HikariConfig pool = new HikariConfig();
+        pool.setJdbcUrl(config.getDatabaseUrl());
+        pool.setUsername(config.getDatabaseUser());
+        pool.setPassword(config.getDatabasePassword());
+        pool.setMaximumPoolSize(config.getDatabasePoolSize());
+        pool.setMinimumIdle(1);
+        pool.setConnectionTimeout(10_000);
+        pool.setValidationTimeout(3_000);
+        pool.setPoolName("smartcity-db");
+        dataSource = new HikariDataSource(pool);
+        Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").load().migrate();
+        logger.info("Database migrations applied");
     }
     
-    public static synchronized H2DatabaseManager getInstance() {
+    public static synchronized DatabaseManager getInstance() {
         if (instance == null) {
-            instance = new H2DatabaseManager();
+            instance = new DatabaseManager();
         }
         return instance;
     }
     
-    private void initializeDatabase() {
-        try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement()) {
-            
-            // Create tables for sensor data, alerts, and recommendations
-            String createSensorDataTable = 
-                "CREATE TABLE IF NOT EXISTS sensor_data (" +
-                "id BIGINT AUTO_INCREMENT PRIMARY KEY, " +
-                "sensor_id VARCHAR(50) NOT NULL, " +
-                "type VARCHAR(20) NOT NULL, " +
-                "value DOUBLE NOT NULL, " +
-                "unit VARCHAR(10), " +
-                "location VARCHAR(100), " +
-                "timestamp TIMESTAMP NOT NULL" +
-                ")";
-            
-            String createAlertsTable = 
-                "CREATE TABLE IF NOT EXISTS alerts (" +
-                "id VARCHAR(36) PRIMARY KEY, " +
-                "sensor_id VARCHAR(50) NOT NULL, " +
-                "sensor_type VARCHAR(20) NOT NULL, " +
-                "message TEXT, " +
-                "severity VARCHAR(10) NOT NULL, " +
-                "timestamp TIMESTAMP NOT NULL, " +
-                "acknowledged BOOLEAN DEFAULT FALSE" +
-                ")";
-            
-            String createRecommendationsTable = 
-                "CREATE TABLE IF NOT EXISTS recommendations (" +
-                "id VARCHAR(36) PRIMARY KEY, " +
-                "resource VARCHAR(20) NOT NULL, " +
-                "action TEXT NOT NULL, " +
-                "justification TEXT, " +
-                "expected_savings DOUBLE, " +
-                "savings_unit VARCHAR(20), " +
-                "timestamp TIMESTAMP NOT NULL, " +
-                "implemented BOOLEAN DEFAULT FALSE" +
-                ")";
-            
-            stmt.execute(createSensorDataTable);
-            stmt.execute(createAlertsTable);
-            stmt.execute(createRecommendationsTable);
-            
-            logger.info("Database tables initialized");
-            
-        } catch (SQLException e) {
-            logger.error("Error initializing database: {}", e.getMessage(), e);
+    public Connection getConnection() throws SQLException {
+        return dataSource.getConnection();
+    }
+
+    public boolean isReady() {
+        try (Connection connection = getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT 1")) {
+            statement.execute();
+            return true;
+        } catch (SQLException error) {
+            logger.warn("Database readiness check failed: {}", error.getMessage());
+            return false;
         }
     }
-    
-    public Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL, USER, PASS);
+
+    public void close() {
+        dataSource.close();
+        synchronized (DatabaseManager.class) {
+            if (instance == this) instance = null;
+        }
+    }
+
+    private IllegalStateException databaseFailure(String operation, SQLException error) {
+        logger.error("Database operation failed: {}", operation, error);
+        return new IllegalStateException("Database operation failed: " + operation, error);
     }
     
     // Sensor Data Methods
     
     public void saveSensorData(SensorData data) {
-        String sql = "INSERT INTO sensor_data (sensor_id, type, value, unit, location, timestamp) VALUES (?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO sensor_data (sensor_id, type, sensor_value, unit, location, timestamp) VALUES (?, ?, ?, ?, ?, ?)";
         
         try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -108,10 +93,10 @@ public class H2DatabaseManager {
             pstmt.setTimestamp(6, Timestamp.valueOf(data.getTimestamp()));
             
             pstmt.executeUpdate();
-            logger.debug("Saved sensor data to H2: {}", data);
+            logger.debug("Saved sensor data: {}", data);
             
         } catch (SQLException e) {
-            logger.error("Error saving sensor data: {}", e.getMessage(), e);
+            throw databaseFailure("save sensor data", e);
         }
     }
     
@@ -144,9 +129,9 @@ public class H2DatabaseManager {
             "       ROW_NUMBER() OVER (PARTITION BY sensor_id, type ORDER BY timestamp DESC) as rn " +
             "   FROM sensor_data " +
             "   WHERE " + typeCriteria +
-            "   AND timestamp >= DATEADD('MINUTE', -30, CURRENT_TIMESTAMP()) " + // Focus on recent data only
+            "   AND timestamp >= ? " +
             ") " +
-            "SELECT id, sensor_id, type, value, unit, location, timestamp " +
+            "SELECT id, sensor_id, type, sensor_value, unit, location, timestamp " +
             "FROM RankedData " +
             "WHERE rn = 1 " +
             "ORDER BY timestamp DESC " +
@@ -155,7 +140,8 @@ public class H2DatabaseManager {
         try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             
-            pstmt.setInt(1, count);
+            pstmt.setTimestamp(1, Timestamp.valueOf(LocalDateTime.now().minusMinutes(30)));
+            pstmt.setInt(2, count);
             long startTime = System.currentTimeMillis();
             
             try (ResultSet rs = pstmt.executeQuery()) {
@@ -168,7 +154,7 @@ public class H2DatabaseManager {
                         logger.warn("Unknown sensor type: {}", rs.getString("type"));
                         continue; // Skip this record
                     }
-                    data.setValue(rs.getDouble("value"));
+                    data.setValue(rs.getDouble("sensor_value"));
                     data.setUnit(rs.getString("unit"));
                     data.setLocation(rs.getString("location"));
                     data.setTimestamp(rs.getTimestamp("timestamp").toLocalDateTime());
@@ -180,7 +166,7 @@ public class H2DatabaseManager {
             logger.debug("Database query for {} readings took {} ms", readings.size(), queryTime);
             
         } catch (SQLException e) {
-            logger.error("Error fetching latest readings: {}", e.getMessage(), e);
+            throw databaseFailure("fetch latest readings", e);
         }
         
         return readings;
@@ -204,10 +190,10 @@ public class H2DatabaseManager {
             pstmt.setBoolean(7, alert.isAcknowledged());
             
             pstmt.executeUpdate();
-            logger.debug("Saved alert to H2: {}", alert.getMessage());
+            logger.debug("Saved alert: {}", alert.getMessage());
             
         } catch (SQLException e) {
-            logger.error("Error saving alert: {}", e.getMessage(), e);
+            throw databaseFailure("save alert", e);
         }
     }
     
@@ -252,7 +238,7 @@ public class H2DatabaseManager {
             }
             
         } catch (SQLException e) {
-            logger.error("Error fetching current alerts: {}", e.getMessage(), e);
+            throw databaseFailure("fetch current alerts", e);
         }
         
         return alerts;
@@ -272,7 +258,7 @@ public class H2DatabaseManager {
             }
             
         } catch (SQLException e) {
-            logger.error("Error acknowledging alert: {}", e.getMessage(), e);
+            throw databaseFailure("acknowledge alert", e);
         }
     }
     
@@ -295,10 +281,10 @@ public class H2DatabaseManager {
             pstmt.setBoolean(8, rec.isImplemented());
             
             pstmt.executeUpdate();
-            logger.debug("Saved recommendation to H2: {}", rec.getAction());
+            logger.debug("Saved recommendation: {}", rec.getAction());
             
         } catch (SQLException e) {
-            logger.error("Error saving recommendation: {}", e.getMessage(), e);
+            throw databaseFailure("save recommendation", e);
         }
     }
     
@@ -329,7 +315,7 @@ public class H2DatabaseManager {
             }
             
         } catch (SQLException e) {
-            logger.error("Error fetching recommendations: {}", e.getMessage(), e);
+            throw databaseFailure("fetch recommendations", e);
         }
         
         return recommendations;
@@ -349,7 +335,7 @@ public class H2DatabaseManager {
             }
             
         } catch (SQLException e) {
-            logger.error("Error implementing recommendation: {}", e.getMessage(), e);
+            throw databaseFailure("implement recommendation", e);
         }
     }
     
@@ -504,18 +490,6 @@ public class H2DatabaseManager {
             }
         }
         
-        logger.info("Generated random test data in H2 database");
-    }
-
-    public void startWebConsole() {
-        try {
-            // Start H2 Console for web access
-            org.h2.tools.Server webServer = org.h2.tools.Server.createWebServer("-webAllowOthers", "-webPort", "8082")
-                    .start();
-            logger.info("H2 Web Console started on port 8082");
-            logger.info("Access the database at http://localhost:8082/");
-        } catch (SQLException e) {
-            logger.error("Failed to start H2 Web Console: {}", e.getMessage(), e);
-        }
+        logger.info("Generated random demo data");
     }
 }
